@@ -1,0 +1,160 @@
+name: buildchatwoot
+
+on:
+  #push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # because we need to install the result chatwoot.tar.gz against Debian 11/glibc 2.31
+    container:
+      image: debian:11
+      options: --init
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+
+
+    #every step must has a run or use
+    steps:
+      - name: Prepare apt and install base tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl gnupg git build-essential tar gzip xz-utils \
+            sudo # laster in build script we can use sudo
+          # add more packages here if your build script needs them
+          apt-get install -y autoconf bison libpq-dev libsass-dev libssl-dev libyaml-dev libreadline-dev zlib1g-dev libncurses5-dev libffi-dev libgdbm-dev libgmp-dev libdb-dev libsqlite3-dev sqlite3
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # 彻底卸载系统残留 Node/NPM/Yarn
+      - name: Completely uninstall system Nodejs & npm & yarn
+        run: |
+          sudo apt -y purge nodejs npm yarn node-legacy || true
+          sudo apt -y autoremove || true
+          sudo apt -y autoclean || true
+          sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx /usr/bin/yarn /usr/bin/yarnpkg || true
+          sudo rm -rf /usr/lib/node_modules /usr/local/lib/node_modules /var/lib/npm /var/lib/yarn || true
+          sudo rm -rf /etc/node /etc/npm /etc/yarn || true
+          rm -rf ~/.npm ~/.yarn ~/.yarnrc ~/.node-gyp ~/.nvm ~/.node_repl_history || true
+          rm -rf ~/.pnpm ~/.cache/node-gyp || true
+          sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn || true
+          echo "===== Verify uninstall ====="
+          node -v || echo "node: Not found (OK)"
+          npm -v || echo "npm: Not found (OK)"
+          npx -v || echo "npx: Not found (OK)"
+          yarn -v || echo "yarn: Not found (OK)"
+
+      - name: 3.upgradenode
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+          # cache: 'yarn'
+
+      - name: Install Yarn 1.x globally
+        run: |
+          npm install -g yarn@1
+
+      # 配置 Yarn 缓存（因为前面注释了）
+      - name: Cache Yarn dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            **/.yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+
+      - name: Completely uninstall system Ruby & gems & rake
+        run: |
+          # 1. APT 卸载系统 Ruby 全家桶
+          sudo apt -y purge ruby ruby-dev ruby-full bundler rake rubygems || true
+          sudo apt -y autoremove || true
+          sudo apt -y autoclean || true
+          # 2. 删除系统二进制与目录残留
+          sudo rm -f /usr/bin/ruby /usr/bin/gem /usr/bin/bundle /usr/bin/rake /usr/bin/irb || true
+          sudo rm -rf /usr/lib/ruby /usr/local/lib/ruby /var/lib/gems/ /etc/ruby /etc/bundler || true
+          # 3. 删除用户目录 Ruby 残留
+          rm -rf ~/.gem ~/.bundle ~/.ruby ~/.rubies ~/.rvm ~/.rbenv || true
+          # 4. 删除 /usr/local 手动安装二进制
+          sudo rm -f /usr/local/bin/ruby /usr/local/bin/gem /usr/local/bin/bundle /usr/local/bin/rake || true
+          # 5. 校验卸载结果
+          echo "===== Verify uninstall ====="
+          ruby -v || echo "ruby: Not found (OK)"
+          bundle -v || echo "bundle: Not found (OK)"
+          rake -v || echo "rake: Not found (OK)"
+
+      # 官方的setup-ruby action检查到容器会提示self hosted runner退出，这里使用自定义action来绕过检查
+      - name: Setup Ruby
+        uses: ./.github/actions/setup-ruby-no-check
+        with:
+          ruby-version: 3.1.3
+
+      # 3. 缓存 Ruby Gems 依赖（对齐 Yarn 顺序：安装在前，缓存在后）
+      - name: Cache Ruby Gems
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.bundle
+            ~/.gem
+          # 绑定 Gemfile.lock，依赖变更自动刷新缓存
+          key: ${{ runner.os }}-gems-${{ hashFiles('**/Gemfile.lock') }}
+
+      # 奇怪的是ruby/bundle的环变不能向下传递到后续的step，跟nodejs,sbt都不同，这里导出为全局ADD_PATHS变量在后续的step中可用
+      - name: Export bundle absolute path and Force use Ruby 3.1.3
+        run: |
+          # 校验版本
+          node -v
+          yarn -v
+          ruby -v
+          bundle -v
+          # 导出为ADD_PATHS变量（不能直接导出为PATH的方式覆盖）
+          echo "ADD_PATHS=$(dirname $(which node)):$(npm config get prefix)/bin:$(dirname $(which ruby)):$(ruby -e 'puts Gem.bindir')" >> $GITHUB_ENV
+
+      - name: 4.buildrepo
+        run: |
+          echo $PWD
+          # 脚本中有$ADD_PATHS对接使用上面导出的$ADD_PATHS，需要使用-E权限
+          sudo -E chmod +x buildchatwoot.sh && sudo -E ./buildchatwoot.sh
+
+
+          #### for main
+          sudo cp .gitignore _tmpbuild/
+          sudo mkdir -p _tmpbuild/.github/workflows && {
+            sudo cp -aR .github/workflows/ghrelease _tmpbuild/.github
+            sudo sed -i s/xxxxxx/chatwoot/g _tmpbuild/.github/ghrelease/upload.js
+          }
+
+          # clean all the src
+          find . -mindepth 1 -maxdepth 1 ! -name _tmpbuild -exec sudo rm -rf {} +
+
+      # inside every step it will rewind to the workspace topdir
+      - name: 5.pushtogithub
+        env:
+          MY_VAR: ${{ secrets.MINLEARNTECHSALLBUILD_GITHUB_PERSONALACCESSTOKEN }}
+        run: |
+          sudo git config --global user.name "minlearn"
+          sudo git config --global user.email "minlearn@minlearn.org"
+
+          echo $PWD
+          cd _tmpbuild
+          sudo git init --initial-branch=master .
+          sudo git add -A
+          sudo git commit -am "githubactions-pushed"
+
+          sudo git remote add origin https://minlearn:$MY_VAR@github.com/minlearn/chatwoot.git
+          sudo git push origin master -f
+
+          # prepare for release upload
+          sudo mkdir -p apps
+          sudo tar cvpzf apps/chatwoot.tar.gz -C _build ./
+
+
+      - name: Upload all local files to initial release of target repo
+        env:
+          GH_PAT: ${{ secrets.MINLEARNTECHSALLBUILD_GITHUB_PERSONALACCESSTOKEN }}
+        run: |
+          npm install @octokit/rest@19.0.7 content-type@1.0.5 --no-save --no-fund
+          node _tmpbuild/.github/ghrelease/upload.js
+

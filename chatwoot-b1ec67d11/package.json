@@ -14,12 +14,11 @@
     "start:dev-overmind": "overmind start -f ./Procfile.dev",
     "storybook": "start-storybook -p 6006",
     "build-storybook": "build-storybook",
-    "ruby:prettier": "bundle exec rubocop -a",
-    "prepare": "husky install"
+    "ruby:prettier": "bundle exec rubocop -a"
   },
   "dependencies": {
     "@braid/vue-formulate": "^2.5.2",
-    "@chatwoot/prosemirror-schema": "https://github.com/chatwoot/prosemirror-schema.git#variable-mention",
+    "@chatwoot/prosemirror-schema": "https://github.com/chatwoot/prosemirror-schema.git#58fe432",
     "@chatwoot/utils": "^0.0.10",
     "@hcaptcha/vue-hcaptcha": "^0.3.2",
     "@june-so/analytics-next": "^1.36.5",

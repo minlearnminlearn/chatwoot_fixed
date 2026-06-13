@@ -1,0 +1,48 @@
+name: Setup Ruby (No Self-Host Check)
+description: Download prebuilt Ruby binary, support custom version, no platform check
+inputs:
+  ruby-version:
+    description: Ruby version to install
+    required: true
+    default: 3.1.3
+runs:
+  using: composite
+  steps:
+    - name: Download and extract Ruby
+      run: |
+        set -euo pipefail
+        RUBY_VERSION=${{ inputs.ruby-version }}
+        MAJOR_MINOR=${RUBY_VERSION%.*}
+
+        # 安装目录（最终运行目录）
+        PREFIX_DIR="$HOME/ruby-r${RUBY_VERSION}"
+        # 源码解压临时目录
+        SRC_WORK_DIR="$HOME/ruby-src"
+        SRC_NAME="ruby-${RUBY_VERSION}.tar.gz"
+        DL_URL="https://cache.ruby-lang.org/pub/ruby/${MAJOR_MINOR}/${SRC_NAME}"
+        SRC_DIR="${SRC_WORK_DIR}/ruby-${RUBY_VERSION}"
+
+        # 已编译完成则直接注入 PATH 并退出
+        if [ -x "${PREFIX_DIR}/bin/ruby" ]; then
+          echo "${PREFIX_DIR}/bin" >> $GITHUB_PATH
+          exit 0
+        fi
+
+        # 准备源码目录
+        mkdir -p "${SRC_WORK_DIR}"
+        cd "${SRC_WORK_DIR}"
+
+        # 下载&解压源码
+        curl -fsSL -O "${DL_URL}"
+        tar -zxf "${SRC_NAME}"
+        rm -f "${SRC_NAME}"
+
+        # 编译安装：prefix 使用独立目录，不再复用当前目录
+        cd "${SRC_DIR}"
+        ./configure --prefix="${PREFIX_DIR}"
+        make -j$(nproc)
+        make install
+
+        # 注入全局 PATH
+        echo "${PREFIX_DIR}/bin" >> $GITHUB_PATH
+      shell: bash
